@@ -11,6 +11,7 @@ depends: [
   "cmdliner"
   "bstr"
   "cachet"
+  "fmt"
 ]
 build: [
   ["dune" "subst"] {dev}

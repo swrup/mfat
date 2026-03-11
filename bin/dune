@@ -10,7 +10,13 @@
  (public_name mfat.unix)
  (foreign_stubs
   (language c)
-  (flags :standard "-Wall" "-Wshadow" "-Wpointer-arith" "-Wcast-qual" "-Wsign-compare")
+  (flags
+   :standard
+   "-Wall"
+   "-Wshadow"
+   "-Wpointer-arith"
+   "-Wcast-qual"
+   "-Wsign-compare")
   (names fs))
  (libraries unix mfat))
 

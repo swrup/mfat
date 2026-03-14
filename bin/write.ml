@@ -23,7 +23,9 @@ let run filename path contents =
         let len = in_channel_length ic in
         really_input_string ic len
   in
-  Fs.with_image filename @@ fun fs -> Fs.write fs path str
+  Fs.with_image filename @@ fun fs ->
+  let* path = Mfat.Spath.of_string path in
+  Fs.write fs path str
 
 open Cmdliner
 

@@ -1,4 +1,113 @@
-type entry = { name: string; is_dir: bool; size: int32 }
+let error_msgf fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt
+
+module Syntax = struct
+  let ( let* ) = Result.bind
+
+  let list_map f l =
+    let err = ref None in
+    try
+      Ok
+        (List.map
+           (fun v ->
+             match f v with
+             | Error _e as e ->
+                 err := Some e;
+                 raise Exit
+             | Ok v -> v)
+           l)
+    with Exit -> ( match !err with None -> assert false | Some v -> v)
+end
+
+open Syntax
+
+module Sfn = struct
+  type t = string
+
+  let root = "/          "
+  let dot_dir = ".          "
+  let dotdot_dir = "..         "
+  let compare = String.compare
+  let equal = String.equal
+
+  (* TODO
+     restrict char set
+     reject "." ".." and "/" filename *)
+  (* Convert a filename to 8.3 format (padded with spaces) *)
+  let of_string s =
+    let s_len = String.length s in
+    let* () =
+      if s_len <= 8 + 1 + 3 then Ok ()
+      else error_msgf "filename too long: `%s`" s
+    in
+    let base, ext =
+      match String.rindex_opt s '.' with
+      | Some i -> (String.sub s 0 i, String.sub s (i + 1) (s_len - i - 1))
+      | None -> (s, "")
+    in
+    let base_len = String.length base in
+    let ext_len = String.length ext in
+    let* () =
+      if base_len <= 8 then Ok () else error_msgf "basename too long: `%s`" base
+    in
+    let* () =
+      if ext_len <= 3 then Ok () else error_msgf "extension too long: `%s`" ext
+    in
+    let b = Bytes.make (8 + 3) ' ' in
+    Bytes.blit_string base 0 b 0 base_len;
+    Bytes.blit_string ext 0 b 8 ext_len;
+    let s = Bytes.to_string b in
+    let s = String.uppercase_ascii s in
+    Ok s
+
+  let base s = String.sub s 0 8 |> String.trim
+  let ext s = String.sub s 8 3 |> String.trim
+
+  (* TODO quote if spaces *)
+  let pp ppf s =
+    let base = base s in
+    let ext = ext s in
+    if ext = "" then Fmt.pf ppf "%s" base else Fmt.pf ppf "%s.%s" base ext
+end
+
+(* TODO limit path length? *)
+module Spath = struct
+  type t = Sfn.t list
+
+  let root = []
+  let add t sfn = sfn :: t
+  let ( / ) = add
+
+  let compare a b =
+    let a = List.rev a in
+    let b = List.rev b in
+    List.compare Sfn.compare a b
+
+  let equal = List.equal Sfn.equal
+
+  let of_string path =
+    let path =
+      if String.length path > 0 && path.[0] = '/' then
+        String.sub path 1 (String.length path - 1)
+      else path
+    in
+    let l = if path = "" then [] else String.split_on_char '/' path in
+    let* l = list_map Sfn.of_string l in
+    Ok (List.rev l)
+
+  let pp ppf t =
+    match t with
+    | [] -> Fmt.pf ppf "/"
+    | l ->
+        let l = List.rev l in
+        Fmt.pf ppf "/%a" (Fmt.list ~sep:(Fmt.any "/") Sfn.pp) l
+
+  let parents_and_sfn t =
+    match t with
+    | [] -> error_msgf "empty path"
+    | sfn :: parents -> Ok (parents, sfn)
+end
+
+type entry = { name: Sfn.t; is_dir: bool; size: int32 }
 
 (* BPB (BIOS Parameter Block) parsed from sector 0 *)
 type bpb = {
@@ -12,9 +121,6 @@ type bpb = {
 }
 
 type 'blk t = { blk: 'blk; cache: 'blk Cachet.t; bpb: bpb }
-
-let error_msgf fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt
-let ( let* ) = Result.bind
 
 (* BPB parsing *)
 
@@ -144,8 +250,7 @@ module Dir (Blk : BLOCK) = struct
   module Fat = Fat (Blk)
 
   type raw_entry = {
-      name: string
-    ; ext: string
+      sfn: Sfn.t
     ; attr: int
     ; first_cluster: int32
     ; file_size: int32
@@ -159,8 +264,7 @@ module Dir (Blk : BLOCK) = struct
       let attr = Cachet.get_uint8 cache (off + 11) in
       if attr = attr_long_name then `LongName
       else
-        let name = Cachet.get_string cache ~len:8 off in
-        let ext = Cachet.get_string cache ~len:3 (off + 8) in
+        let sfn = Cachet.get_string cache ~len:11 off in
         let cluster_high = Cachet.get_uint16_le cache (off + 20) in
         let cluster_low = Cachet.get_uint16_le cache (off + 26) in
         let first_cluster =
@@ -169,17 +273,11 @@ module Dir (Blk : BLOCK) = struct
             (Int32.of_int cluster_low)
         in
         let file_size = Cachet.get_int32_le cache (off + 28) in
-        `Entry { name; ext; attr; first_cluster; file_size }
-
-  let format_name raw =
-    let name = String.trim raw.name in
-    let ext = String.trim raw.ext in
-    if ext = "" then name else name ^ "." ^ ext
+        `Entry { sfn; attr; first_cluster; file_size }
 
   let to_entry raw =
-    let name = String.uppercase_ascii (format_name raw) in
     let is_dir = raw.attr land attr_directory <> 0 in
-    { name; is_dir; size= raw.file_size }
+    { name= raw.sfn; is_dir; size= raw.file_size }
 
   let read_dir cache bpb cluster =
     let clusters = Fat.follow_chain cache bpb cluster in
@@ -197,57 +295,30 @@ module Dir (Blk : BLOCK) = struct
             | `End -> stop := true
             | `Deleted | `LongName -> ()
             | `Entry raw ->
-                if raw.name <> ".       " && raw.name <> "..      " then
-                  entries := raw :: !entries
+                if
+                  not
+                    (Sfn.equal raw.sfn Sfn.dot_dir
+                    || Sfn.equal raw.sfn Sfn.dotdot_dir)
+                then entries := raw :: !entries
         done
     in
     List.iter fn clusters; List.rev !entries
 
-  let find_in_dir cache bpb cluster name =
-    let target = String.uppercase_ascii name in
+  let find_in_dir cache bpb cluster sfn =
     let entries = read_dir cache bpb cluster in
-    let matches raw =
-      let formatted = String.uppercase_ascii (format_name raw) in
-      formatted = target
-    in
+    let matches raw = Sfn.equal sfn raw.sfn in
     match List.find_opt matches entries with
     | Some e -> Ok e
-    | None -> error_msgf "%s: not found" name
-
-  (* Convert a filename to 8.3 format (padded with spaces) *)
-  let to_8_3 name =
-    let name = String.uppercase_ascii name in
-    let base, ext =
-      match String.rindex_opt name '.' with
-      | None -> (name, "")
-      | Some i ->
-          ( String.sub name 0 i
-          , String.sub name (i + 1) (String.length name - i - 1) )
-    in
-    let base =
-      let b = Bytes.make 8 ' ' in
-      let len = min 8 (String.length base) in
-      Bytes.blit_string base 0 b 0 len;
-      Bytes.to_string b
-    in
-    let ext =
-      let e = Bytes.make 3 ' ' in
-      let len = min 3 (String.length ext) in
-      Bytes.blit_string ext 0 e 0 len;
-      Bytes.to_string e
-    in
-    (base, ext)
+    | None -> error_msgf "%a: not found" Sfn.pp sfn
 
   (* Write a 32-byte directory entry at the given offset *)
-  let write_entry_at blk cache off ~name_8 ~ext_3 ~attr ~first_cluster
-      ~file_size =
+  let write_entry_at blk cache off ~sfn ~attr ~first_cluster ~file_size =
     let pagesize = Blk.pagesize blk in
     let page_off = off / pagesize * pagesize in
     let buf = Bstr.create pagesize in
     Blk.read blk ~src_off:page_off buf;
     let rel = off - page_off in
-    Bstr.blit_from_string name_8 ~src_off:0 buf ~dst_off:rel ~len:8;
-    Bstr.blit_from_string ext_3 ~src_off:0 buf ~dst_off:(rel + 8) ~len:3;
+    Bstr.blit_from_string sfn ~src_off:0 buf ~dst_off:rel ~len:11;
     Bstr.set_uint8 buf (rel + 11) attr;
     (* Bytes 12-19: reserved/time fields, zero them *)
     Bstr.memset buf ~off:(rel + 12) ~len:8 '\000';
@@ -302,17 +373,14 @@ module Dir (Blk : BLOCK) = struct
             Ok base
       end
 
-  let add_entry blk cache bpb dir_cluster ~name_8 ~ext_3 ~attr ~first_cluster
-      ~file_size =
+  let add_entry blk cache bpb dir_cluster ~sfn ~attr ~first_cluster ~file_size =
     match find_free_slot blk cache bpb dir_cluster with
     | Error _ as err -> err
     | Ok off ->
-        write_entry_at blk cache off ~name_8 ~ext_3 ~attr ~first_cluster
-          ~file_size;
+        write_entry_at blk cache off ~sfn ~attr ~first_cluster ~file_size;
         Ok ()
 
-  let remove_entry blk cache bpb dir_cluster name =
-    let target = String.uppercase_ascii name in
+  let remove_entry blk cache bpb dir_cluster sfn =
     let clusters = Fat.follow_chain cache bpb dir_cluster in
     let cluster_sz = Bpb.cluster_size bpb in
     let found = ref false in
@@ -327,8 +395,7 @@ module Dir (Blk : BLOCK) = struct
             | `End -> ()
             | `Deleted | `LongName -> ()
             | `Entry raw ->
-                let formatted = String.uppercase_ascii (format_name raw) in
-                if formatted = target then (
+                if Sfn.equal sfn raw.sfn then (
                   let pagesize = Blk.pagesize blk in
                   let page_off = off / pagesize * pagesize in
                   let buf = Bstr.create pagesize in
@@ -340,11 +407,10 @@ module Dir (Blk : BLOCK) = struct
         done
     in
     List.iter fn clusters;
-    if !found then Ok () else error_msgf "%s: not found" name
+    if !found then Ok () else error_msgf "%a: not found" Sfn.pp sfn
 
   (* Update the file_size and first_cluster of an existing directory entry *)
-  let update_entry blk cache bpb dir_cluster name ~first_cluster ~file_size =
-    let target = String.uppercase_ascii name in
+  let update_entry blk cache bpb dir_cluster sfn ~first_cluster ~file_size =
     let clusters = Fat.follow_chain cache bpb dir_cluster in
     let cluster_sz = Bpb.cluster_size bpb in
     let found = ref false in
@@ -359,60 +425,38 @@ module Dir (Blk : BLOCK) = struct
             | `End -> ()
             | `Deleted | `LongName -> ()
             | `Entry raw ->
-                let formatted = String.uppercase_ascii (format_name raw) in
-                if formatted = target then (
-                  let name_8, ext_3 = to_8_3 name in
-                  write_entry_at blk cache off ~name_8 ~ext_3 ~attr:raw.attr
+                if Sfn.equal sfn raw.sfn then (
+                  write_entry_at blk cache off ~sfn ~attr:raw.attr
                     ~first_cluster ~file_size;
                   found := true)
         done
     in
     List.iter fn clusters;
-    if !found then Ok () else error_msgf "%s: not found" name
-end
-
-module Path (Blk : BLOCK) = struct
-  module Dir = Dir (Blk)
-
-  let split path =
-    let path =
-      if String.length path > 0 && path.[0] = '/' then
-        String.sub path 1 (String.length path - 1)
-      else path
-    in
-    if path = "" then [] else String.split_on_char '/' path
-
-  let parent_and_name path =
-    let parts = split path in
-    match List.rev parts with
-    | [] -> error_msgf "empty path"
-    | name :: rev_parent -> Ok (List.rev rev_parent, name)
-
-  let resolve_dir cache bpb parts =
-    let rec go cluster = function
-      | [] -> Ok cluster
-      | name :: rest ->
-          let* raw = Dir.find_in_dir cache bpb cluster name in
-          if raw.Dir.attr land Dir.attr_directory <> 0 then
-            go raw.Dir.first_cluster rest
-          else error_msgf "%s: not a directory" name
-    in
-    go bpb.root_cluster parts
-
-  let resolve cache bpb path =
-    let parts = split path in
-    match List.rev parts with
-    | [] -> Ok (bpb.root_cluster, None)
-    | name :: rev_parent ->
-        let* dir_cluster = resolve_dir cache bpb (List.rev rev_parent) in
-        let* raw = Dir.find_in_dir cache bpb dir_cluster name in
-        Ok (dir_cluster, Some raw)
+    if !found then Ok () else error_msgf "%a: not found" Sfn.pp sfn
 end
 
 module Make (Blk : BLOCK) = struct
   module Fat = Fat (Blk)
   module Dir = Dir (Blk)
-  module Path = Path (Blk)
+
+  let resolve_dir cache bpb path =
+    let rec go cluster = function
+      | [] -> Ok cluster
+      | sfn :: rest ->
+          let* raw = Dir.find_in_dir cache bpb cluster sfn in
+          if raw.Dir.attr land Dir.attr_directory <> 0 then
+            go raw.Dir.first_cluster rest
+          else error_msgf "%a: not a directory" Sfn.pp sfn
+    in
+    go bpb.root_cluster (List.rev path)
+
+  let resolve cache bpb path =
+    match path with
+    | [] -> Ok (bpb.root_cluster, None)
+    | sfn :: parents ->
+        let* dir_cluster = resolve_dir cache bpb parents in
+        let* raw = Dir.find_in_dir cache bpb dir_cluster sfn in
+        Ok (dir_cluster, Some raw)
 
   let create blk =
     let pagesize = Blk.pagesize blk in
@@ -426,18 +470,17 @@ module Make (Blk : BLOCK) = struct
     Ok { blk; cache; bpb }
 
   let ls t path =
-    let parts = Path.split path in
-    let* cluster = Path.resolve_dir t.cache t.bpb parts in
+    let* cluster = resolve_dir t.cache t.bpb path in
     let raws = Dir.read_dir t.cache t.bpb cluster in
     Ok (List.map Dir.to_entry raws)
 
   let read t path =
-    let* _, v = Path.resolve t.cache t.bpb path in
+    let* _, v = resolve t.cache t.bpb path in
     match v with
-    | None -> error_msgf "%s: is root directory" path
+    | None -> error_msgf "%a: is root directory" Spath.pp path
     | Some raw ->
         if raw.Dir.attr land Dir.attr_directory <> 0 then
-          error_msgf "%s: is a directory" path
+          error_msgf "%a: is a directory" Spath.pp path
         else
           let size = Int32.to_int raw.Dir.file_size in
           if size = 0 then Ok ""
@@ -494,15 +537,15 @@ module Make (Blk : BLOCK) = struct
     List.iter fn clusters
 
   let write t path data =
-    let* parent_parts, name = Path.parent_and_name path in
-    let* dir_cluster = Path.resolve_dir t.cache t.bpb parent_parts in
+    let* parents, sfn = Spath.parents_and_sfn path in
+    let* dir_cluster = resolve_dir t.cache t.bpb parents in
     let data_len = String.length data in
     let cluster_sz = Bpb.cluster_size t.bpb in
     let needed_clusters =
       if data_len = 0 then 0 else (data_len + cluster_sz - 1) / cluster_sz
     in
     (* Check if file already exists *)
-    let existing = Dir.find_in_dir t.cache t.bpb dir_cluster name in
+    let existing = Dir.find_in_dir t.cache t.bpb dir_cluster sfn in
     let existing = Result.to_option existing in
     (* Free old clusters if file exists *)
     let fn raw =
@@ -533,19 +576,18 @@ module Make (Blk : BLOCK) = struct
     let file_size = Int32.of_int data_len in
     match existing with
     | Some _ ->
-        Dir.update_entry t.blk t.cache t.bpb dir_cluster name ~first_cluster
+        Dir.update_entry t.blk t.cache t.bpb dir_cluster sfn ~first_cluster
           ~file_size
     | None ->
-        let name_8, ext_3 = Dir.to_8_3 name in
-        Dir.add_entry t.blk t.cache t.bpb dir_cluster ~name_8 ~ext_3 ~attr:0x20
+        Dir.add_entry t.blk t.cache t.bpb dir_cluster ~sfn ~attr:0x20
           ~first_cluster ~file_size
 
   let mkdir t path =
-    let* parent_parts, name = Path.parent_and_name path in
-    let* dir_cluster = Path.resolve_dir t.cache t.bpb parent_parts in
+    let* parents, sfn = Spath.parents_and_sfn path in
+    let* dir_cluster = resolve_dir t.cache t.bpb parents in
     (* Check if already exists *)
-    match Dir.find_in_dir t.cache t.bpb dir_cluster name with
-    | Ok _ -> error_msgf "%s: already exists" name
+    match Dir.find_in_dir t.cache t.bpb dir_cluster sfn with
+    | Ok _ -> error_msgf "%a: already exists" Sfn.pp sfn
     | Error _ -> begin
         (* Allocate a cluster for the new directory *)
         match Fat.alloc_cluster t.blk t.cache t.bpb with
@@ -564,44 +606,41 @@ module Make (Blk : BLOCK) = struct
               Cachet.invalidate t.cache ~off ~len:pagesize
             done;
             (* Create . entry *)
-            Dir.write_entry_at t.blk t.cache base ~name_8:".       "
-              ~ext_3:"   " ~attr:Dir.attr_directory ~first_cluster:new_cl
-              ~file_size:0l;
+            Dir.write_entry_at t.blk t.cache base ~sfn:Sfn.dot_dir
+              ~attr:Dir.attr_directory ~first_cluster:new_cl ~file_size:0l;
             (* Create .. entry *)
-            Dir.write_entry_at t.blk t.cache (base + 32) ~name_8:"..      "
-              ~ext_3:"   " ~attr:Dir.attr_directory ~first_cluster:dir_cluster
-              ~file_size:0l;
+            Dir.write_entry_at t.blk t.cache (base + 32) ~sfn:Sfn.dotdot_dir
+              ~attr:Dir.attr_directory ~first_cluster:dir_cluster ~file_size:0l;
             (* Add entry in parent directory *)
-            let name_8, ext_3 = Dir.to_8_3 name in
-            Dir.add_entry t.blk t.cache t.bpb dir_cluster ~name_8 ~ext_3
+            Dir.add_entry t.blk t.cache t.bpb dir_cluster ~sfn
               ~attr:Dir.attr_directory ~first_cluster:new_cl ~file_size:0l
       end
 
   let remove t path =
-    let* parent_parts, name = Path.parent_and_name path in
-    let* dir_cluster = Path.resolve_dir t.cache t.bpb parent_parts in
-    let* raw = Dir.find_in_dir t.cache t.bpb dir_cluster name in
+    let* parents, sfn = Spath.parents_and_sfn path in
+    let* dir_cluster = resolve_dir t.cache t.bpb parents in
+    let* raw = Dir.find_in_dir t.cache t.bpb dir_cluster sfn in
     (* If directory, check it's empty *)
     if raw.Dir.attr land Dir.attr_directory <> 0 then
       let entries = Dir.read_dir t.cache t.bpb raw.Dir.first_cluster in
-      if entries <> [] then error_msgf "%s: directory not empty" name
+      if entries <> [] then error_msgf "%a: directory not empty" Sfn.pp sfn
       else (
         Fat.free_chain t.blk t.cache t.bpb raw.Dir.first_cluster;
-        Dir.remove_entry t.blk t.cache t.bpb dir_cluster name)
+        Dir.remove_entry t.blk t.cache t.bpb dir_cluster sfn)
     else (
       if raw.Dir.first_cluster <> 0l then
         Fat.free_chain t.blk t.cache t.bpb raw.Dir.first_cluster;
-      Dir.remove_entry t.blk t.cache t.bpb dir_cluster name)
+      Dir.remove_entry t.blk t.cache t.bpb dir_cluster sfn)
 
   let exists t path =
-    match Path.resolve t.cache t.bpb path with Ok _ -> true | Error _ -> false
+    match resolve t.cache t.bpb path with Ok _ -> true | Error _ -> false
 
   let stat t path =
-    let parts = Path.split path in
-    if parts = [] then Ok { name= "/"; is_dir= true; size= 0l }
-    else
-      match Path.resolve t.cache t.bpb path with
-      | Error _ as e -> e
-      | Ok (_, None) -> Ok { name= "/"; is_dir= true; size= 0l }
-      | Ok (_, Some raw) -> Ok (Dir.to_entry raw)
+    match path with
+    | [] -> Ok { name= Sfn.root; is_dir= true; size= 0l }
+    | _ -> (
+        match resolve t.cache t.bpb path with
+        | Error _ as e -> e
+        | Ok (_, None) -> Ok { name= Sfn.root; is_dir= true; size= 0l }
+        | Ok (_, Some raw) -> Ok (Dir.to_entry raw))
 end

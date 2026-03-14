@@ -2,6 +2,7 @@ let ( let* ) = Result.bind
 
 let run fpath path =
   Fs.with_image fpath @@ fun t ->
+  let* path = Mfat.Spath.of_string path in
   let* data = Fs.read t path in
   print_string data; Ok ()
 

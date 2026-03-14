@@ -1,4 +1,9 @@
-let run fpath path = Fs.with_image fpath @@ fun t -> Fs.mkdir t path
+let ( let* ) = Result.bind
+
+let run fpath path =
+  Fs.with_image fpath @@ fun t ->
+  let* path = Mfat.Spath.of_string path in
+  Fs.mkdir t path
 
 open Cmdliner
 

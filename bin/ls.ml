@@ -1,11 +1,13 @@
 let ( let* ) = Result.bind
 
 let show_entry entry =
-  if entry.Mfat.is_dir then Fmt.pr "%s/\n%!" entry.Mfat.name
-  else Fmt.pr "%s (%ld)\n%!" entry.Mfat.name entry.Mfat.size
+  let open Mfat in
+  if entry.Mfat.is_dir then Fmt.pr "%a/\n%!" Sfn.pp entry.name
+  else Fmt.pr "%a (%ld)\n%!" Sfn.pp entry.name entry.Mfat.size
 
 let run fpath path =
   Fs.with_image fpath @@ fun t ->
+  let* path = Mfat.Spath.of_string path in
   let* entries = Fs.ls t path in
   List.iter show_entry entries;
   Ok ()

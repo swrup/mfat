@@ -1,15 +1,12 @@
-type t = File of string * string | Dir of string * t list
+type t = File of Mfat.Sfn.t * string | Dir of Mfat.Sfn.t * t list
 
-let ( / ) = Filename.concat
-let ( let* ) = Result.bind
 let bytes_per_sector = 512
+let ( let* ) = Result.bind
 
 let rec collect_tree t path =
   let* entries = Fs.ls t path in
   let fn acc entry =
-    let abs =
-      if path = "/" then "/" ^ entry.Mfat.name else path / entry.Mfat.name
-    in
+    let abs = Mfat.Spath.(path / entry.Mfat.name) in
     match acc with
     | Error _ as err -> err
     | Ok acc when entry.Mfat.is_dir ->
@@ -28,10 +25,10 @@ let rec restore_tree t base nodes =
     match (acc, node) with
     | (Error _ as err), _ -> err
     | Ok (), File (name, contents) ->
-        let abs = if base = "/" then "/" ^ name else base / name in
+        let abs = Mfat.Spath.(base / name) in
         Fs.write t abs contents
     | Ok (), Dir (name, children) ->
-        let abs = if base = "/" then "/" ^ name else base / name in
+        let abs = Mfat.Spath.(base / name) in
         let* () = Fs.mkdir t abs in
         restore_tree t abs children
   in
@@ -64,14 +61,14 @@ let run fpath =
   let finally () = Unix.close fd in
   Fun.protect ~finally @@ fun () ->
   let* t = Fs.create fd in
-  let* tree = collect_tree t "/" in
+  let* tree = collect_tree t Mfat.Spath.root in
   let n_files, n_dirs = count_tree tree in
   let total_sectors = read_total_sectors fd in
   let total_size = total_sectors * bytes_per_sector in
   Unix.ftruncate fd total_size;
   Make.format fd ~total_sectors;
   let* t = Fs.create fd in
-  let* () = restore_tree t "/" tree in
+  let* () = restore_tree t Mfat.Spath.root tree in
   Fmt.pr "Defragmented %s: %d file(s), %d directory(ies)\n" fpath n_files n_dirs;
   Ok ()
 

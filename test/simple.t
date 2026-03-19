@@ -39,13 +39,13 @@
   $ mfat ls test.fat
   $ mfat make -s 2048 defrag.fat
   Formatted defrag.fat: 2048 sectors (1048576 bytes), FAT32
-  $ echo -n "AAAA" | mfat write defrag.fat /A.TXT -
-  $ echo -n "BBBB" | mfat write defrag.fat /B.TXT -
-  $ echo -n "CCCC" | mfat write defrag.fat /C.TXT -
+  $ printf "AAAA" | mfat write defrag.fat /A.TXT -
+  $ printf "BBBB" | mfat write defrag.fat /B.TXT -
+  $ printf "CCCC" | mfat write defrag.fat /C.TXT -
   $ mfat mkdir defrag.fat /SUB
-  $ echo -n "SUB"| mfat write defrag.fat /SUB/N.TXT -
+  $ printf "SUB"| mfat write defrag.fat /SUB/N.TXT -
   $ mfat rm defrag.fat /B.TXT
-  $ echo -n "DDDDDDDD" | mfat write defrag.fat /D.TXT -
+  $ printf "DDDDDDDD" | mfat write defrag.fat /D.TXT -
   $ mfat ls defrag.fat
   A.TXT (4)
   D.TXT (8)

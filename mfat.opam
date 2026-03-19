@@ -7,7 +7,7 @@ bug-reports: "https://github.com/robur-coop/mfat/issues"
 license: "MIT"
 
 depends: [
-  "ocaml" {>= "5.0.0"}
+  "ocaml" {>= "5.1.0"}
   "cmdliner"
   "bstr"
   "cachet"

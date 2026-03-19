@@ -68,3 +68,44 @@
   SUB
   $ mfat ls defrag.fat /SUB
   N.TXT (3)
+  $ mfat make -s 2048 lfn.fat
+  Formatted lfn.fat: 2048 sectors (1048576 bytes), FAT32
+  $ mfat write lfn.fat /hello.txt - <<EOF
+  > Hello with lowercase!
+  > EOF
+  $ mfat ls lfn.fat
+  hello.txt (22)
+  $ mfat cat lfn.fat /hello.txt
+  Hello with lowercase!
+  $ mfat write lfn.fat "/My Long Document.txt" - <<EOF
+  > Long name content
+  > EOF
+  $ mfat ls lfn.fat
+  hello.txt (22)
+  My Long Document.txt (18)
+  $ mfat cat lfn.fat "/My Long Document.txt"
+  Long name content
+  $ mfat mkdir lfn.fat /MyFolder
+  $ mfat ls lfn.fat
+  hello.txt (22)
+  My Long Document.txt (18)
+  MyFolder/
+  $ mfat write lfn.fat /MyFolder/notes.md - <<EOF
+  > Some notes
+  > EOF
+  $ mfat ls lfn.fat /MyFolder
+  notes.md (11)
+  $ mfat cat lfn.fat /MyFolder/notes.md
+  Some notes
+  $ mfat rm lfn.fat "/My Long Document.txt"
+  $ mfat ls lfn.fat
+  hello.txt (22)
+  MyFolder/
+  $ mfat write lfn.fat /hello.txt - <<EOF
+  > Updated!
+  > EOF
+  $ mfat cat lfn.fat /hello.txt
+  Updated!
+  $ mfat ls lfn.fat
+  hello.txt (9)
+  MyFolder/

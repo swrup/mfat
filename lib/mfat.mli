@@ -1,5 +1,8 @@
+type sfn
+type spath
+
 module Sfn : sig
-  type t
+  type t = sfn
 
   val compare : t -> t -> int
   val equal : t -> t -> bool
@@ -9,19 +12,21 @@ module Sfn : sig
 end
 
 module Spath : sig
-  type t
+  type t = spath
 
+  val root : t
+  val add : t -> sfn -> t
+  val ( / ) : t -> sfn -> t
+  val v : sfn -> t
   val compare : t -> t -> int
   val equal : t -> t -> bool
-  val root : t
-  val add : t -> Sfn.t -> t
-  val ( / ) : t -> Sfn.t -> t
   val of_string : string -> (t, [> `Msg of string ]) result
   val pp : Format.formatter -> t -> unit
+  val to_string : t -> string
 end
 
 type 'blk t
-type entry = { name: Sfn.t; is_dir: bool; size: int32 }
+type entry = { name: sfn; is_dir: bool; size: int32 }
 
 module type BLOCK = sig
   type t
@@ -33,11 +38,11 @@ end
 
 module Make (Blk : BLOCK) : sig
   val create : Blk.t -> (Blk.t t, [> `Msg of string ]) result
-  val ls : Blk.t t -> Spath.t -> (entry list, [> `Msg of string ]) result
-  val read : Blk.t t -> Spath.t -> (string, [> `Msg of string ]) result
-  val write : Blk.t t -> Spath.t -> string -> (unit, [> `Msg of string ]) result
-  val mkdir : Blk.t t -> Spath.t -> (unit, [> `Msg of string ]) result
-  val remove : Blk.t t -> Spath.t -> (unit, [> `Msg of string ]) result
-  val exists : Blk.t t -> Spath.t -> bool
-  val stat : Blk.t t -> Spath.t -> (entry, [> `Msg of string ]) result
+  val ls : Blk.t t -> spath -> (entry list, [> `Msg of string ]) result
+  val read : Blk.t t -> spath -> (string, [> `Msg of string ]) result
+  val write : Blk.t t -> spath -> string -> (unit, [> `Msg of string ]) result
+  val mkdir : Blk.t t -> spath -> (unit, [> `Msg of string ]) result
+  val remove : Blk.t t -> spath -> (unit, [> `Msg of string ]) result
+  val exists : Blk.t t -> spath -> bool
+  val stat : Blk.t t -> spath -> (entry, [> `Msg of string ]) result
 end

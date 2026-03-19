@@ -76,6 +76,7 @@ module Spath = struct
   let root = []
   let add t sfn = sfn :: t
   let ( / ) = add
+  let v sfn = root / sfn
 
   let compare a b =
     let a = List.rev a in
@@ -101,13 +102,17 @@ module Spath = struct
         let l = List.rev l in
         Fmt.pf ppf "/%a" (Fmt.list ~sep:(Fmt.any "/") Sfn.pp) l
 
+  let to_string t = Fmt.str "%a" pp t
+
   let parents_and_sfn t =
     match t with
     | [] -> error_msgf "empty path"
     | sfn :: parents -> Ok (parents, sfn)
 end
 
-type entry = { name: Sfn.t; is_dir: bool; size: int32 }
+type sfn = Sfn.t
+type spath = Spath.t
+type entry = { name: sfn; is_dir: bool; size: int32 }
 
 (* BPB (BIOS Parameter Block) parsed from sector 0 *)
 type bpb = {

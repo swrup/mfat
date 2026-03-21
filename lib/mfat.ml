@@ -26,8 +26,16 @@ module Sfn = struct
   let root = "/          "
   let dot_dir = ".          "
   let dotdot_dir = "..         "
+  let base s = String.sub s 0 8 |> String.trim
+  let ext s = String.sub s 8 3 |> String.trim
   let compare = String.compare
   let equal = String.equal
+
+  (* TODO quote if spaces *)
+  let pp ppf s =
+    let base = base s in
+    let ext = ext s in
+    if ext = "" then Fmt.pf ppf "%s" base else Fmt.pf ppf "%s.%s" base ext
 
   (* TODO
      restrict char set
@@ -59,14 +67,7 @@ module Sfn = struct
     let s = String.uppercase_ascii s in
     Ok s
 
-  let base s = String.sub s 0 8 |> String.trim
-  let ext s = String.sub s 8 3 |> String.trim
-
-  (* TODO quote if spaces *)
-  let pp ppf s =
-    let base = base s in
-    let ext = ext s in
-    if ext = "" then Fmt.pf ppf "%s" base else Fmt.pf ppf "%s.%s" base ext
+  let to_string t = Fmt.str "%a" pp t
 end
 
 (* TODO limit path length? *)

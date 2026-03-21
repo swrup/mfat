@@ -1,13 +1,18 @@
 type sfn
 type spath
+type 'blk t
+type entry = { name: sfn; is_dir: bool; size: int32 }
 
 module Sfn : sig
   type t = sfn
 
+  val root : t
+  val base : t -> string
+  val ext : t -> string
   val compare : t -> t -> int
   val equal : t -> t -> bool
-  val root : t
   val of_string : string -> (t, [> `Msg of string ]) result
+  val to_string : t -> string
   val pp : Format.formatter -> t -> unit
 end
 
@@ -15,18 +20,15 @@ module Spath : sig
   type t = spath
 
   val root : t
+  val v : sfn -> t
   val add : t -> sfn -> t
   val ( / ) : t -> sfn -> t
-  val v : sfn -> t
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val of_string : string -> (t, [> `Msg of string ]) result
-  val pp : Format.formatter -> t -> unit
   val to_string : t -> string
+  val pp : Format.formatter -> t -> unit
 end
-
-type 'blk t
-type entry = { name: sfn; is_dir: bool; size: int32 }
 
 module type BLOCK = sig
   type t

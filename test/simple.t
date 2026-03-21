@@ -109,3 +109,18 @@
   $ mfat ls lfn.fat
   hello.txt (9)
   MyFolder/
+  $ mfat rm lfn.fat /MyFolder/notes.md
+  $ mfat rm lfn.fat /MyFolder
+  $ mfat rm lfn.fat hello.txt
+
+Test case preservation and case insensitivity
+  $ mfat write lfn.fat /My_File.TXT - <<EOF
+  > foo
+  > EOF
+  $ mfat write lfn.fat /my_file.txt - <<EOF
+  > bar
+  > EOF
+  $  mfat cat lfn.fat /My_File.TXT
+  bar
+  $ mfat ls lfn.fat
+  My_File.TXT (4)

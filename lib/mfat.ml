@@ -234,16 +234,23 @@ module Dir (Blk : BLOCK) = struct
   let format_name raw =
     let name = String.trim raw.name in
     let ext = String.trim raw.ext in
-    if ext = "" then name else name ^ "." ^ ext
+    let fname = if ext = "" then name else name ^ "." ^ ext in
+    String.uppercase_ascii fname
 
   let to_entry raw =
     let name =
-      match raw.long_name with
-      | Some ln -> ln
-      | None -> String.uppercase_ascii (format_name raw)
+      match raw.long_name with Some ln -> ln | None -> format_name raw
     in
     let is_dir = raw.attr land attr_directory <> 0 in
     { name; is_dir; size= raw.file_size }
+
+  let name_matches name =
+    let name = String.uppercase_ascii name in
+    fun raw ->
+      String.equal name
+        (match raw.long_name with
+        | Some ln -> String.uppercase_ascii ln
+        | None -> format_name raw)
 
   let reconstruct_long_name lfn_parts raw =
     match lfn_parts with
@@ -289,16 +296,8 @@ module Dir (Blk : BLOCK) = struct
     List.iter fn clusters; List.rev !entries
 
   let find_in_dir cache bpb cluster name =
-    let target = String.uppercase_ascii name in
     let entries = read_dir cache bpb cluster in
-    let matches raw =
-      match raw.long_name with
-      | Some ln -> String.uppercase_ascii ln = target
-      | None ->
-          let formatted = String.uppercase_ascii (format_name raw) in
-          formatted = target
-    in
-    match List.find_opt matches entries with
+    match List.find_opt (name_matches name) entries with
     | Some e -> Ok e
     | None -> error_msgf "%s: not found" name
 
@@ -590,7 +589,7 @@ module Dir (Blk : BLOCK) = struct
     Cachet.invalidate cache ~off:page_off ~len:pagesize
 
   let remove_entry blk cache bpb dir_cluster name =
-    let target_upper = String.uppercase_ascii name in
+    let name_matches raw = name_matches name raw in
     let clusters = Fat.follow_chain cache bpb dir_cluster in
     let cluster_sz = Bpb.cluster_size bpb in
     let found = ref false in
@@ -612,14 +611,10 @@ module Dir (Blk : BLOCK) = struct
                 lfn_offsets := off :: !lfn_offsets;
                 lfn_parts := (ord, chk, chars) :: !lfn_parts
             | `Entry raw ->
-                let long_name = reconstruct_long_name !lfn_parts raw in
-                let matches =
-                  match long_name with
-                  | Some ln -> String.uppercase_ascii ln = target_upper
-                  | None ->
-                      String.uppercase_ascii (format_name raw) = target_upper
+                let raw =
+                  { raw with long_name= reconstruct_long_name !lfn_parts raw }
                 in
-                if matches then begin
+                if name_matches raw then begin
                   List.iter (mark_deleted blk cache) !lfn_offsets;
                   mark_deleted blk cache off;
                   found := true
@@ -633,7 +628,7 @@ module Dir (Blk : BLOCK) = struct
 
   (* Update the file_size and first_cluster of an existing directory entry *)
   let update_entry blk cache bpb dir_cluster name ~first_cluster ~file_size =
-    let target_upper = String.uppercase_ascii name in
+    let name_matches raw = name_matches name raw in
     let clusters = Fat.follow_chain cache bpb dir_cluster in
     let cluster_sz = Bpb.cluster_size bpb in
     let found = ref false in
@@ -652,14 +647,10 @@ module Dir (Blk : BLOCK) = struct
             | `LongName (ord, chk, chars) ->
                 lfn_parts := (ord, chk, chars) :: !lfn_parts
             | `Entry raw ->
-                let long_name = reconstruct_long_name !lfn_parts raw in
-                let matches =
-                  match long_name with
-                  | Some ln -> String.uppercase_ascii ln = target_upper
-                  | None ->
-                      String.uppercase_ascii (format_name raw) = target_upper
+                let raw =
+                  { raw with long_name= reconstruct_long_name !lfn_parts raw }
                 in
-                if matches then begin
+                if name_matches raw then begin
                   write_entry_at blk cache off ~name_8:raw.name ~ext_3:raw.ext
                     ~attr:raw.attr ~first_cluster ~file_size;
                   found := true

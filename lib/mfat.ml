@@ -237,11 +237,13 @@ module Dir (Blk : BLOCK) = struct
     let fname = if ext = "" then name else name ^ "." ^ ext in
     String.uppercase_ascii fname
 
+  let is_dir raw = raw.attr land attr_directory <> 0
+
   let to_entry raw =
     let name =
       match raw.long_name with Some ln -> ln | None -> format_name raw
     in
-    let is_dir = raw.attr land attr_directory <> 0 in
+    let is_dir = is_dir raw in
     { name; is_dir; size= raw.file_size }
 
   let name_matches name =
@@ -684,8 +686,7 @@ module Path (Blk : BLOCK) = struct
       | [] -> Ok cluster
       | name :: rest ->
           let* raw = Dir.find_in_dir cache bpb cluster name in
-          if raw.Dir.attr land Dir.attr_directory <> 0 then
-            go raw.Dir.first_cluster rest
+          if Dir.is_dir raw then go raw.Dir.first_cluster rest
           else error_msgf "%s: not a directory" name
     in
     go bpb.root_cluster parts
@@ -727,8 +728,7 @@ module Make (Blk : BLOCK) = struct
     match v with
     | None -> error_msgf "%s: is root directory" path
     | Some raw ->
-        if raw.Dir.attr land Dir.attr_directory <> 0 then
-          error_msgf "%s: is a directory" path
+        if Dir.is_dir raw then error_msgf "%s: is a directory" path
         else
           let size = Int32.to_int raw.Dir.file_size in
           if size = 0 then Ok ""
@@ -871,7 +871,7 @@ module Make (Blk : BLOCK) = struct
     let* dir_cluster = Path.resolve_dir t.cache t.bpb parent_parts in
     let* raw = Dir.find_in_dir t.cache t.bpb dir_cluster name in
     (* If directory, check it's empty *)
-    if raw.Dir.attr land Dir.attr_directory <> 0 then
+    if Dir.is_dir raw then
       let entries = Dir.read_dir t.cache t.bpb raw.Dir.first_cluster in
       if entries <> [] then error_msgf "%s: directory not empty" name
       else begin
